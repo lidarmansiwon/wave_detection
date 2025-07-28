@@ -13,6 +13,7 @@
 #include "wave_detection/wave_detection.hpp"
 #include "cv_bridge/cv_bridge.h"
 #include "opencv2/imgproc/imgproc.hpp"
+#include <cmath> // For std::abs, std::atan2, CV_PI
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
@@ -23,7 +24,7 @@ WaveDetection::WaveDetection(const rclcpp::NodeOptions & node_options)
 {
   this->declare_parameter<std::string>("image_topic", "/ouster/signal_image");
   this->declare_parameter<int>("wave_roi_start_row_percentage", 70); // 예시: 이미지 높이의 60%부터 파도 ROI 시작
-  this->declare_parameter<int>("crest_threshold", 50); // 파고 임계값 (0-255)
+  this->declare_parameter<int>("crest_threshold", 150); // 파고 임계값 (0-255)
   this->declare_parameter<int>("trough_threshold", 200);  // 파저 임계값 (0-255)
 
   std::string image_topic  = this->get_parameter("image_topic").as_string();
@@ -115,12 +116,9 @@ void WaveDetection::process()
     return;
   }
   
-  // rclcpp::Time current_time = this->now(); // 사용되지 않음
-
   // 1. 관심 영역(ROI) 설정
   int img_height = current_cv_image_.rows;
   int img_width = current_cv_image_.cols;
-  // 트랙바를 통해 업데이트된 wave_roi_start_row_percentage_ 사용
   int roi_start_row = static_cast<int>(img_height * (wave_roi_start_row_percentage_ / 100.0));
   
   if (roi_start_row >= img_height) {
@@ -136,47 +134,45 @@ void WaveDetection::process()
       return;
   }
 
-  // 3. 파저(Wave Trough) 추출
-  cv::Mat wave_trough_mask;
-  // 트랙바를 통해 업데이트된 trough_threshold_ 사용
-  cv::threshold(wave_roi_image, wave_trough_mask, trough_threshold_, 255, cv::THRESH_BINARY);
-
+  // 2. 파고(Wave Crest) 추출 (밝은 부분을 마스크)
+  cv::Mat wave_crest_mask;
+  // 파도 상단이 밝은 부분이라면 THRESH_BINARY를 사용합니다.
+  cv::threshold(wave_roi_image, wave_crest_mask, crest_threshold_, 255, cv::THRESH_BINARY);
 
   // 시각화를 위한 이미지 준비
   cv::Mat display_image;
   cv::cvtColor(wave_roi_image, display_image, cv::COLOR_GRAY2BGR); // ROI를 컬러 이미지로 변환
 
-  // 파저 윤곽선 찾기
-  std::vector<std::vector<cv::Point>> trough_contours;
-  cv::findContours(wave_trough_mask.clone(), trough_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-  // 파저 윤곽선 그리기 (파란색)
-  for (const auto& contour : trough_contours) {
-      // 위와 동일하게 display_image는 ROI 이미지이므로 변환 불필요
-      cv::drawContours(display_image, std::vector<std::vector<cv::Point>>{contour}, -1, cv::Scalar(255, 0, 0), 2); // 파란색 (BGR)
-  }
-
+  // -------------------------------------------------------------
+  // 파고(Crest) 직선 추출 (허프 변환)
+  // -------------------------------------------------------------
   cv::Mat canny_output_crest;
   // Canny 임계값도 조절 필요합니다. wave_crest_mask가 이진 이미지이므로
   // Canny는 사실상 엣지를 더 가늘게 만듭니다.
-  cv::Canny(wave_trough_mask, canny_output_crest, 50, 150, 3); // Canny 엣지 검출 (minVal, maxVal 조정 필요)
+  cv::Canny(wave_crest_mask, canny_output_crest, 50, 150, 3); // Canny 엣지 검출 (minVal, maxVal 조정 필요)
 
   std::vector<cv::Vec4i> lines;
-  cv::HoughLinesP(canny_output_crest, lines, 1, CV_PI / 180,
-                  20,    // threshold: 투표 수를 낮춰 더 많은 선 검출 시도
+
+  // 확률적 허프 변환 적용
+  // 초기 디버깅을 위해 HoughLinesP 파라미터를 좀 더 관대하게 설정합니다.
+  // threshold를 낮게, minLineLength도 낮게, maxLineGap은 적절히.
+  cv::HoughLinesP(canny_output_crest, lines, 1, CV_PI / 360,
+                  30,    // threshold: 투표 수를 낮춰 더 많은 선 검출 시도
                   30,    // minLineLength: 최소 직선 길이를 줄여 짧은 선도 검출 시도
                   10);   // maxLineGap: 간격 허용
 
+  
+
   // 검출된 모든 파고 직선들을 display_image에 그리기 (빨간색)
   // 각도 필터링은 일단 제거하여 모든 직선이 그려지는지 확인합니다.
-  // for (const auto& l : lines) {
-  //     cv::line(display_image, cv::Point(l[0], l[1]), cv::Point(l[2], l[3]), cv::Scalar(0, 0, 255), 2, cv::LINE_AA); // 빨간색 선
-  // }
+  for (const auto& l : lines) {
+      cv::line(display_image, cv::Point(l[0], l[1]), cv::Point(l[2], l[3]), cv::Scalar(0, 0, 255), 2, cv::LINE_AA); // 빨간색 선
+  }
 
   // OpenCV 창에 실시간으로 표시
-  cv::imshow(window_name_, display_image); // 창 이름 변경
-  cv::imshow("Wave Troughs Mask", wave_trough_mask);
-    cv::imshow("Canny Output Crest", canny_output_crest); // 이 창을 꼭 확인
+  cv::imshow(window_name_, display_image);
+  cv::imshow("Wave Crests Mask", wave_crest_mask);
+  cv::imshow("Canny Output Crest", canny_output_crest); // 이 창을 꼭 확인하세요! 엣지가 보이는지?
   cv::waitKey(1); // 1ms 대기, UI 업데이트
 
   // RViz2에 퍼블리시
@@ -185,11 +181,12 @@ void WaveDetection::process()
       sensor_msgs::msg::Image::SharedPtr processed_msg = cv_bridge::CvImage(header, "bgr8", display_image).toImageMsg();
       processed_image_publisher_->publish(*processed_msg);
 
-      // sensor_msgs::msg::Image::SharedPtr crest_mask_msg = cv_bridge::CvImage(header, "mono8", wave_crest_mask).toImageMsg();
-      // wave_crest_image_publisher_->publish(*crest_mask_msg);
+      sensor_msgs::msg::Image::SharedPtr crest_mask_msg = cv_bridge::CvImage(header, "mono8", wave_crest_mask).toImageMsg();
+      wave_crest_image_publisher_->publish(*crest_mask_msg);
 
-      sensor_msgs::msg::Image::SharedPtr trough_mask_msg = cv_bridge::CvImage(header, "mono8", wave_trough_mask).toImageMsg();
-      wave_trough_image_publisher_->publish(*trough_mask_msg);
+      // wave_trough_image_publisher_는 사용하지 않으므로 퍼블리시 코드도 주석 처리
+      // sensor_msgs::msg::Image::SharedPtr trough_mask_msg = cv_bridge::CvImage(header, "mono8", wave_trough_mask).toImageMsg();
+      // wave_trough_image_publisher_->publish(*trough_mask_msg);
 
   } catch (cv_bridge::Exception& e) {
       RCLCPP_ERROR(this->get_logger(), "cv_bridge exception during publishing: %s", e.what());
