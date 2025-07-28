@@ -20,6 +20,13 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)       
 find_package(std_msgs REQUIRED)    
 find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED) # cv_bridge 추가
+find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui) # OpenCV 추가 (필요한 모듈)
+# find_package(visualization_msgs REQUIRED) # 마커 사용 시 추가
+
+# ament_auto_add_library(wave_detection SHARED
+#   src/wave_detection.cpp
+# )
 
 include_directories(include)
 
@@ -30,7 +37,16 @@ install(
 )
 
 add_executable(wave_detection src/main.cpp src/wave_detection.cpp)
-ament_target_dependencies(wave_detection rclcpp sensor_msgs)
+
+ament_target_dependencies(wave_detection
+  rclcpp
+  std_msgs
+  sensor_msgs
+  cv_bridge
+  OpenCV
+  # visualization_msgs # 마커 사용 시 추가
+)
+
 
 
 # Set include directories
