@@ -22,9 +22,9 @@ WaveDetection::WaveDetection(const rclcpp::NodeOptions & node_options)
 
 {
   this->declare_parameter<std::string>("image_topic", "/ouster/signal_image");
-  this->declare_parameter<int>("wave_roi_start_row_percentage", 60); // 예시: 이미지 높이의 60%부터 파도 ROI 시작
-  this->declare_parameter<int>("crest_threshold", 200); // 파고 임계값 (0-255)
-  this->declare_parameter<int>("trough_threshold", 50);  // 파저 임계값 (0-255)
+  this->declare_parameter<int>("wave_roi_start_row_percentage", 70); // 예시: 이미지 높이의 60%부터 파도 ROI 시작
+  this->declare_parameter<int>("crest_threshold", 50); // 파고 임계값 (0-255)
+  this->declare_parameter<int>("trough_threshold", 200);  // 파저 임계값 (0-255)
 
   std::string image_topic  = this->get_parameter("image_topic").as_string();
   wave_roi_start_row_percentage_ = this->get_parameter("wave_roi_start_row_percentage").as_int();
@@ -49,6 +49,15 @@ WaveDetection::WaveDetection(const rclcpp::NodeOptions & node_options)
   // // 마커 퍼블리셔 (선택 사항)
   // marker_publisher_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/wave_detection/markers", 10);
 
+  // OpenCV 창과 트랙바 생성
+  cv::namedWindow(window_name_, cv::WINDOW_AUTOSIZE); // resizable 창 생성
+  cv::createTrackbar("ROI Start %", window_name_, &wave_roi_start_row_percentage_, 100, on_trackbar_roi, this);
+  cv::createTrackbar("Crest Thresh", window_name_, &crest_threshold_, 255, on_trackbar_crest, this);
+  cv::createTrackbar("Trough Thresh", window_name_, &trough_threshold_, 255, on_trackbar_trough, this);
+  // 초기값으로 설정된 파라미터가 트랙바에 반영되도록 설정 (필수)
+  cv::setTrackbarPos("ROI Start %", window_name_, wave_roi_start_row_percentage_);
+  cv::setTrackbarPos("Crest Thresh", window_name_, crest_threshold_);
+  cv::setTrackbarPos("Trough Thresh", window_name_, trough_threshold_);
 
   // 50ms --> 20Hz 
   timer_ = this->create_wall_timer(50ms, std::bind(&WaveDetection::process, this));
@@ -99,26 +108,19 @@ double WaveDetection::get_sysSec_from_ros_time(const rclcpp::Time& ros_time)
 
 void WaveDetection::process()
 {
-  if (current_cv_image_.empty()) // 이미지 데이터가 아직 없으면 처리하지 않음
+  if (current_cv_image_.empty())
   {
     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
                          "'image' data not received or converted yet.");
     return;
   }
   
-  rclcpp::Time current_time = this->now();
-  // double cal_time = current_time.seconds(); // 사용되지 않음
-  // double systime = get_sysSec_from_ros_time(current_time); // 현재는 이 노드에서 불필요
-
-  // if (!start_time_set_) {
-  //   start_time_sec_ = systime;
-  //   start_time_set_ = true;
-  // }
-  // double time_since_start = systime - start_time_sec_; // 현재는 이 노드에서 불필요
+  // rclcpp::Time current_time = this->now(); // 사용되지 않음
 
   // 1. 관심 영역(ROI) 설정
   int img_height = current_cv_image_.rows;
   int img_width = current_cv_image_.cols;
+  // 트랙바를 통해 업데이트된 wave_roi_start_row_percentage_ 사용
   int roi_start_row = static_cast<int>(img_height * (wave_roi_start_row_percentage_ / 100.0));
   
   if (roi_start_row >= img_height) {
@@ -128,7 +130,6 @@ void WaveDetection::process()
   cv::Rect roi(0, roi_start_row, img_width, img_height - roi_start_row);
   cv::Mat wave_roi_image = current_cv_image_(roi);
 
-  // ROI 이미지가 비어있는지 확인
   if (wave_roi_image.empty()) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
                            "Wave ROI image is empty. Check ROI parameters and input image dimensions.");
@@ -137,11 +138,13 @@ void WaveDetection::process()
 
   // 2. 파고(Wave Crest) 추출
   cv::Mat wave_crest_mask;
-  cv::threshold(wave_roi_image, wave_crest_mask, crest_threshold_, 255, cv::THRESH_BINARY);
+  // 트랙바를 통해 업데이트된 crest_threshold_ 사용
+  cv::threshold(wave_roi_image, wave_crest_mask, crest_threshold_, 255, cv::THRESH_BINARY_INV);
 
   // 3. 파저(Wave Trough) 추출
   cv::Mat wave_trough_mask;
-  cv::threshold(wave_roi_image, wave_trough_mask, trough_threshold_, 255, cv::THRESH_BINARY_INV); // 임계값보다 낮은 픽셀을 흰색으로
+  // 트랙바를 통해 업데이트된 trough_threshold_ 사용
+  cv::threshold(wave_roi_image, wave_trough_mask, trough_threshold_, 255, cv::THRESH_BINARY);
 
 
   // 시각화를 위한 이미지 준비
@@ -155,10 +158,10 @@ void WaveDetection::process()
   // 파고 윤곽선 그리기 (초록색)
   for (const auto& contour : crest_contours) {
       // 원본 이미지 좌표계로 변환 (ROI 시작점 고려)
-      std::vector<cv::Point> transformed_contour;
-      for (const auto& pt : contour) {
-          transformed_contour.push_back(cv::Point(pt.x, pt.y + roi_start_row));
-      }
+      // 이 부분은 display_image가 wave_roi_image를 기반으로 생성되었으므로
+      // contour는 이미 wave_roi_image 내의 상대 좌표입니다.
+      // 따라서 변환 없이 바로 drawContours를 사용해도 됩니다.
+      // cv::Point(pt.x, pt.y + roi_start_row) 는 전체 이미지에 그릴 때 사용합니다.
       cv::drawContours(display_image, std::vector<std::vector<cv::Point>>{contour}, -1, cv::Scalar(0, 255, 0), 2); // 초록색 (BGR)
   }
 
@@ -168,38 +171,49 @@ void WaveDetection::process()
 
   // 파저 윤곽선 그리기 (파란색)
   for (const auto& contour : trough_contours) {
-      // 원본 이미지 좌표계로 변환 (ROI 시작점 고려)
-      std::vector<cv::Point> transformed_contour;
-      for (const auto& pt : contour) {
-          transformed_contour.push_back(cv::Point(pt.x, pt.y + roi_start_row));
-      }
+      // 위와 동일하게 display_image는 ROI 이미지이므로 변환 불필요
       cv::drawContours(display_image, std::vector<std::vector<cv::Point>>{contour}, -1, cv::Scalar(255, 0, 0), 2); // 파란색 (BGR)
   }
 
-
-  // OpenCV 창에 실시간으로 표시 (로컬에서 디버깅 시 유용)
-  // cv::imshow("Original Image (ROI)", wave_roi_image); // ROI만 볼 때
-  cv::imshow("Wave Detection Result", display_image);
+  // OpenCV 창에 실시간으로 표시
+  cv::imshow(window_name_, display_image); // 창 이름 변경
   cv::imshow("Wave Crests Mask", wave_crest_mask);
   cv::imshow("Wave Troughs Mask", wave_trough_mask);
   cv::waitKey(1); // 1ms 대기, UI 업데이트
 
   // RViz2에 퍼블리시
-  // 처리된 이미지 (컬러)
   try {
-      std_msgs::msg::Header header = image_data_->header; // 원본 이미지의 헤더 사용
+      std_msgs::msg::Header header = image_data_->header;
       sensor_msgs::msg::Image::SharedPtr processed_msg = cv_bridge::CvImage(header, "bgr8", display_image).toImageMsg();
       processed_image_publisher_->publish(*processed_msg);
 
-      // 파고 마스크 이미지 (흑백)
       sensor_msgs::msg::Image::SharedPtr crest_mask_msg = cv_bridge::CvImage(header, "mono8", wave_crest_mask).toImageMsg();
       wave_crest_image_publisher_->publish(*crest_mask_msg);
 
-      // 파저 마스크 이미지 (흑백)
       sensor_msgs::msg::Image::SharedPtr trough_mask_msg = cv_bridge::CvImage(header, "mono8", wave_trough_mask).toImageMsg();
       wave_trough_image_publisher_->publish(*trough_mask_msg);
 
   } catch (cv_bridge::Exception& e) {
       RCLCPP_ERROR(this->get_logger(), "cv_bridge exception during publishing: %s", e.what());
   }
+}
+
+// 트랙바 콜백 함수 구현
+// static 함수이므로 클래스 외부에서 정의
+void WaveDetection::on_trackbar_crest(int val, void* userdata) {
+    WaveDetection* node = static_cast<WaveDetection*>(userdata);
+    node->crest_threshold_ = val;
+    RCLCPP_INFO(node->get_logger(), "Crest Threshold updated to: %d", val);
+}
+
+void WaveDetection::on_trackbar_trough(int val, void* userdata) {
+    WaveDetection* node = static_cast<WaveDetection*>(userdata);
+    node->trough_threshold_ = val;
+    RCLCPP_INFO(node->get_logger(), "Trough Threshold updated to: %d", val);
+}
+
+void WaveDetection::on_trackbar_roi(int val, void* userdata) {
+    WaveDetection* node = static_cast<WaveDetection*>(userdata);
+    node->wave_roi_start_row_percentage_ = val;
+    RCLCPP_INFO(node->get_logger(), "ROI Start Row Percentage updated to: %d", val);
 }
