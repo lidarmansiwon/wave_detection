@@ -36,6 +36,10 @@ private:
   static void on_trackbar_trough(int val, void* userdata);
   static void on_trackbar_roi(int val, void* userdata);
 
+  // Canny 임계값 트랙바 콜백 함수 추가
+  static void on_trackbar_canny_low(int val, void* userdata);
+  static void on_trackbar_canny_high(int val, void* userdata);
+
   // Callback 함수 정의
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg);
 
@@ -61,6 +65,10 @@ private:
   int wave_roi_start_row_percentage_; // 파도 ROI 시작 행 (전체 이미지 높이에 대한 백분율)
   int crest_threshold_; // 파고 추출을 위한 밝기 임계값
   int trough_threshold_; // 파저 추출을 위한 밝기 임계값
+
+  // Canny 임계값 멤버 변수 추가
+  int canny_low_threshold_;
+  int canny_high_threshold_;
 
   std::string window_name_ = "Wave Detection Result"; // 창 이름 멤버 변수
 

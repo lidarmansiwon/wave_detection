@@ -158,12 +158,6 @@ void WaveDetection::process()
   // 트랙바를 통해 업데이트된 trough_threshold_ 사용
   cv::threshold(wave_roi_image, wave_trough_mask, trough_threshold_, 255, cv::THRESH_BINARY);
 
-    // 2. 파고(Wave Crest) 추출
-  cv::Mat wave_crest_mask;
-  // 트랙바를 통해 업데이트된 crest_threshold_ 사용
-  cv::threshold(wave_roi_image, wave_crest_mask, crest_threshold_, 255, cv::THRESH_BINARY_INV);
-
-
 
   // 시각화를 위한 이미지 준비
   cv::Mat display_image;
@@ -182,7 +176,7 @@ void WaveDetection::process()
   cv::Mat canny_output_crest;
   // Canny 임계값도 조절 필요합니다. wave_crest_mask가 이진 이미지이므로
   // Canny는 사실상 엣지를 더 가늘게 만듭니다.
-  cv::Canny(wave_trough_mask, canny_output_crest, canny_low_threshold_, canny_high_threshold_, 3);
+  cv::Canny(wave_roi_image, canny_output_crest, canny_low_threshold_, canny_high_threshold_, 3);
 
   std::vector<cv::Vec4i> lines;
   cv::HoughLinesP(canny_output_crest, lines, 1, CV_PI / 180,
@@ -199,8 +193,7 @@ void WaveDetection::process()
   // OpenCV 창에 실시간으로 표시
   cv::imshow(window_name_, display_image); // 창 이름 변경
   cv::imshow("Wave Troughs Mask", wave_trough_mask);
-  cv::imshow("Canny Output Crest2", wave_crest_mask); // 이 창을 꼭 확인
-  cv::imshow("Canny Output Crest", canny_output_crest); // 이 창을 꼭 확인
+    cv::imshow("Canny Output Crest", canny_output_crest); // 이 창을 꼭 확인
   cv::waitKey(1); // 1ms 대기, UI 업데이트
 
   // RViz2에 퍼블리시
